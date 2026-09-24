@@ -1464,15 +1464,18 @@ def main():
     with st.sidebar:
         st.header("📁 Données")
         mode = st.radio("Source :",
-                        ["Demo", "Upload PED/MAP", "Upload VCF"], index=0)
+                        ["Demo", "Upload PED/MAP", "Upload VCF"], index=0,
+                        key="sb_mode_source")
 
         if mode == "Demo":
             c1, c2 = st.columns(2)
-            n_ind = c1.number_input("Individus", 20, 1000, 150, 10)
-            n_snp = c2.number_input("SNPs", 100, 10000, 800, 100)
-            n_pop = st.slider("Populations", 2, 10, 4)
+            n_ind = c1.number_input("Individus", 20, 1000, 150, 10,
+                                    key="sb_n_ind")
+            n_snp = c2.number_input("SNPs", 100, 10000, 800, 100,
+                                    key="sb_n_snp")
+            n_pop = st.slider("Populations", 2, 10, 4, key="sb_n_pop")
             if st.button("🎲 Générer le jeu de démo",
-                         use_container_width=True):
+                         use_container_width=True, key="sb_btn_demo"):
                 with st.spinner("Génération..."):
                     gt, ind_df, snp_df = generate_demo_data(
                         int(n_ind), int(n_snp), int(n_pop))
@@ -1486,12 +1489,14 @@ def main():
         elif mode == "Upload PED/MAP":
             st.info("Formats : .ped, .ped.gz, .map, .map.gz")
             ped_f = st.file_uploader("Fichier .ped",
-                                     type=["ped", "gz", "txt"])
+                                     type=["ped", "gz", "txt"],
+                                     key="sb_ped_file")
             map_f = st.file_uploader("Fichier .map",
-                                     type=["map", "gz", "txt"])
+                                     type=["map", "gz", "txt"],
+                                     key="sb_map_file")
             if ped_f and map_f:
                 if st.button("📥 Charger PED + MAP",
-                             use_container_width=True):
+                             use_container_width=True, key="sb_btn_ped"):
                     try:
                         with st.spinner("Parsing .map..."):
                             map_df, _ = parse_map(map_f.read())
@@ -1511,9 +1516,11 @@ def main():
 
         else:  # VCF
             vcf_f = st.file_uploader("Fichier .vcf",
-                                     type=["vcf", "gz", "txt"])
+                                     type=["vcf", "gz", "txt"],
+                                     key="sb_vcf_file")
             if vcf_f is not None:
-                if st.button("📥 Charger VCF", use_container_width=True):
+                if st.button("📥 Charger VCF", use_container_width=True,
+                             key="sb_btn_vcf"):
                     try:
                         with st.spinner("Parsing VCF..."):
                             gt, ind_df, snp_df, n_skip, n_multi = parse_vcf(
@@ -1530,24 +1537,25 @@ def main():
         st.divider()
         st.header("⚙️ Seuils QC")
         geno = st.slider("Missingness SNP (--geno)", 0.0, 0.5,
-                         DEFAULT_THRESHOLDS["geno"], 0.01)
+                         DEFAULT_THRESHOLDS["geno"], 0.01, key="sb_geno")
         mind = st.slider("Missingness individu (--mind)", 0.0, 0.5,
-                         DEFAULT_THRESHOLDS["mind"], 0.01)
+                         DEFAULT_THRESHOLDS["mind"], 0.01, key="sb_mind")
         maf_thr = st.slider("MAF minimal (--maf)", 0.0, 0.5,
-                            DEFAULT_THRESHOLDS["maf"], 0.01)
+                            DEFAULT_THRESHOLDS["maf"], 0.01, key="sb_maf")
         hwe_thr = st.number_input("HWE p-value (--hwe)",
                                   value=DEFAULT_THRESHOLDS["hwe"],
-                                  format="%.0e")
+                                  format="%.0e", key="sb_hwe")
         het_sd = st.slider("Hétérozygotie ±σ intra-race", 1.0, 5.0,
-                           DEFAULT_THRESHOLDS["het_sd"], 0.1)
+                           DEFAULT_THRESHOLDS["het_sd"], 0.1, key="sb_het_sd")
         ld_r2 = st.slider("LD Pruning r² seuil", 0.05, 0.5,
-                          DEFAULT_THRESHOLDS["ld_r2"], 0.05)
+                          DEFAULT_THRESHOLDS["ld_r2"], 0.05, key="sb_ld_r2")
         king_cutoff = st.slider("KING cutoff", 0.1, 0.5,
-                                DEFAULT_THRESHOLDS["king_cutoff"], 0.01)
+                                DEFAULT_THRESHOLDS["king_cutoff"], 0.01,
+                                key="sb_king")
 
         st.divider()
         if st.button("🚀 Pipeline complet", type="primary",
-                     use_container_width=True):
+                     use_container_width=True, key="sb_btn_pipeline"):
             if not has_data():
                 st.error("Chargez d'abord des données.")
             else:
@@ -1610,9 +1618,11 @@ def main():
         c3.metric("Populations (FID)", ind_df["FID"].nunique())
 
         st.subheader("Individus")
-        st.dataframe(ind_df.head(20), use_container_width=True)
+        st.dataframe(ind_df.head(20), use_container_width=True,
+                     key="tab0_df_ind")
         st.subheader("SNPs")
-        st.dataframe(snp_df.head(5), use_container_width=True)
+        st.dataframe(snp_df.head(5), use_container_width=True,
+                     key="tab0_df_snp")
 
         with st.expander("🔬 Compatibilité ARS-UCD1.2"):
             chroms = sorted(snp_df["CHR"].astype(str).unique(),
@@ -1627,7 +1637,8 @@ def main():
                                 "ARS_len": ARS_UCD12_LENGTHS[key],
                                 "ok": max_bp <= ARS_UCD12_LENGTHS[key]})
             if cov:
-                st.dataframe(pd.DataFrame(cov), use_container_width=True)
+                st.dataframe(pd.DataFrame(cov), use_container_width=True,
+                             key="tab0_df_ars")
 
     # ============ TAB 2 : QC ============
     with tabs[1]:
@@ -1641,7 +1652,8 @@ def main():
             "Jeu de données propre (typiquement 9 animaux retirés, "
             "~46 709 SNPs restants).")
 
-        if st.button("🧬 Filtrer autosomes 1-29", use_container_width=True):
+        if st.button("🧬 Filtrer autosomes 1-29", use_container_width=True,
+                     key="qc_btn_auto"):
             try:
                 gt_a, snp_a = filter_autosomes(st.session_state.gt,
                                                st.session_state.snp_df)
@@ -1652,7 +1664,7 @@ def main():
                 st.error(f"❌ {e}")
 
         if st.button("▶ Lancer le QC complet", type="primary",
-                     use_container_width=True):
+                     use_container_width=True, key="qc_btn_run"):
             try:
                 with st.spinner("Filtrage en cascade..."):
                     params = {"geno": geno, "mind": mind, "maf": maf_thr,
@@ -1683,20 +1695,27 @@ def main():
             st.json(s.get("trace", {}))
 
             gt_full = st.session_state.gt
-            st.plotly_chart(plot_missingness_dashboard(
-                missingness_per_ind(gt_full),
-                missingness_per_snp(gt_full)), use_container_width=True)
+            st.plotly_chart(
+                plot_missingness_dashboard(
+                    missingness_per_ind(gt_full),
+                    missingness_per_snp(gt_full)),
+                use_container_width=True,
+                key="qc_plot_missingness")
 
             c1, c2 = st.columns(2)
             with c1:
-                st.plotly_chart(plot_hist(maf(gt_full), "Spectre MAF",
-                                          "MAF", "#2ecc71"),
-                                use_container_width=True)
+                st.plotly_chart(
+                    plot_hist(maf(gt_full), "Spectre MAF",
+                              "MAF", "#2ecc71"),
+                    use_container_width=True,
+                    key="qc_plot_hist_maf")
             with c2:
-                st.plotly_chart(plot_hist(heterozygosity(gt_full),
-                                          "Hétérozygotie observée",
-                                          "HET", "#9b59b6"),
-                                use_container_width=True)
+                st.plotly_chart(
+                    plot_hist(heterozygosity(gt_full),
+                              "Hétérozygotie observée",
+                              "HET", "#9b59b6"),
+                    use_container_width=True,
+                    key="qc_plot_hist_het")
 
             render_ai_panel("QC", s, "tab_qc")
             st.divider()
@@ -1716,7 +1735,7 @@ def main():
             st.warning("⚠️ Lancez d'abord le QC.")
         else:
             if st.button("▶ Lancer le LD Pruning", type="primary",
-                         use_container_width=True):
+                         use_container_width=True, key="ld_btn_run"):
                 try:
                     with st.spinner("LD pruning..."):
                         keep = ld_pruning(st.session_state.gt_filt,
@@ -1745,7 +1764,8 @@ def main():
                     st.session_state.ld_df = ld_df
                 fig = plot_ld_decay(ld_df)
                 if fig:
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True,
+                                    key="ld_plot_decay_pruning")
 
     # ============ TAB 4 : Structure ============
     with tabs[3]:
@@ -1764,7 +1784,7 @@ def main():
                       else st.session_state.gt_filt)
 
             if st.button("▶ PCA + MDS + KING", type="primary",
-                         use_container_width=True):
+                         use_container_width=True, key="struct_btn_run"):
                 try:
                     with st.spinner("PCA..."):
                         s_, v_ = pca_analysis(gt_use, 10)
@@ -1783,10 +1803,12 @@ def main():
             if st.session_state.pca_scores is not None:
                 st.plotly_chart(plot_pca(st.session_state.pca_scores,
                                          st.session_state.pca_var, labels),
-                                use_container_width=True)
+                                use_container_width=True,
+                                key="struct_plot_pca")
             if st.session_state.mds_coords is not None:
                 st.plotly_chart(plot_mds(st.session_state.mds_coords, labels),
-                                use_container_width=True)
+                                use_container_width=True,
+                                key="struct_plot_mds")
 
             if st.session_state.king_matrix is not None:
                 K = st.session_state.king_matrix
@@ -1798,10 +1820,11 @@ def main():
                 id_labels = (st.session_state.ind_filt["FID"].astype(str) + "_" +
                              st.session_state.ind_filt["IID"].astype(str)).values
                 st.plotly_chart(plot_kinship_heatmap(K, id_labels),
-                                use_container_width=True)
+                                use_container_width=True,
+                                key="struct_plot_king")
 
                 if st.button("🗑️ Appliquer le filtre KING",
-                             use_container_width=True):
+                             use_container_width=True, key="struct_btn_king_apply"):
                     st.session_state.ind_filt = (
                         st.session_state.ind_filt[keep_mask].reset_index(drop=True))
                     st.session_state.gt_filt = st.session_state.gt_filt[keep_mask]
@@ -1827,11 +1850,11 @@ def main():
                       else st.session_state.gt_filt)
 
             c1, c2 = st.columns(2)
-            K_max = c1.slider("K max pour CV", 3, 10, 6)
-            n_reps = c2.slider("Répétitions CV", 1, 5, 3)
+            K_max = c1.slider("K max pour CV", 3, 10, 6, key="admix_K_max")
+            n_reps = c2.slider("Répétitions CV", 1, 5, 3, key="admix_n_reps")
 
             if st.button("▶ CV error (K optimal)",
-                         use_container_width=True):
+                         use_container_width=True, key="admix_btn_cv"):
                 try:
                     with st.spinner(f"CV error K=2..{K_max}..."):
                         cv = admix_cv_error(gt_use,
@@ -1844,13 +1867,15 @@ def main():
 
             if st.session_state.cv_results is not None:
                 fig = plot_cv_error(st.session_state.cv_results)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True,
+                                key="admix_plot_cv_error")
                 render_ai_panel("Admixture", st.session_state.cv_results,
                                 "tab_admix_cv")
 
-            K = st.slider("Nombre d'ancestralités K", 2, 10, 4)
+            K = st.slider("Nombre d'ancestralités K", 2, 10, 4,
+                          key="admix_K")
             if st.button("▶ Calculer l'admixture",
-                         use_container_width=True):
+                         use_container_width=True, key="admix_btn_run"):
                 try:
                     with st.spinner(f"NMF K={K}..."):
                         Q, _ = admixture_nmf(gt_use, K=int(K))
@@ -1866,11 +1891,12 @@ def main():
                 pops = st.session_state.ind_filt["FID"].values
                 iids = st.session_state.ind_filt["IID"].values
                 fig, df_s = plot_admixture(Q, iids, pops, K)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True,
+                                key="admix_plot_barplot")
                 st.subheader("Proportions moyennes par race")
                 st.dataframe(df_s.groupby("Pop")[
                     [f"K{k+1}" for k in range(K)]].mean().round(3),
-                    use_container_width=True)
+                    use_container_width=True, key="admix_df_means")
 
     # ============ TAB 6 : Démographie ============
     with tabs[5]:
@@ -1889,7 +1915,7 @@ def main():
             sub1, sub2, sub3 = st.tabs(["LD decay", "ROH", "Ne (SNeP-like)"])
 
             with sub1:
-                if st.button("▶ LD decay", key="btn_ld",
+                if st.button("▶ LD decay", key="demo_btn_ld",
                              use_container_width=True):
                     try:
                         with st.spinner("LD decay..."):
@@ -1902,14 +1928,18 @@ def main():
                         st.error(f"❌ {e}")
                 if (st.session_state.ld_df is not None
                         and not st.session_state.ld_df.empty):
-                    st.plotly_chart(plot_ld_decay(st.session_state.ld_df),
-                                    use_container_width=True)
+                    st.plotly_chart(
+                        plot_ld_decay(st.session_state.ld_df),
+                        use_container_width=True,
+                        key="demo_plot_ld_decay")
 
             with sub2:
                 c1, c2 = st.columns(2)
-                min_snps_roh = c1.slider("Min SNPs par ROH", 5, 200, 30, 5)
-                min_kb_roh = c2.slider("Longueur min (kb)", 50, 5000, 500, 50)
-                if st.button("▶ Détecter les ROH", key="btn_roh",
+                min_snps_roh = c1.slider("Min SNPs par ROH", 5, 200, 30, 5,
+                                         key="demo_min_snps_roh")
+                min_kb_roh = c2.slider("Longueur min (kb)", 50, 5000, 500, 50,
+                                       key="demo_min_kb_roh")
+                if st.button("▶ Détecter les ROH", key="demo_btn_roh",
                              use_container_width=True):
                     try:
                         with st.spinner("Détection ROH..."):
@@ -1931,14 +1961,16 @@ def main():
                     c2.metric("FROH médian", f"{np.median(froh):.4f}")
                     c3.metric("Total ROH", len(st.session_state.roh_df))
                     labels = st.session_state.ind_filt["FID"].values
-                    st.plotly_chart(plot_roh_histogram(froh, labels),
-                                    use_container_width=True)
+                    st.plotly_chart(
+                        plot_roh_histogram(froh, labels),
+                        use_container_width=True,
+                        key="demo_plot_roh_hist")
                     render_ai_panel("ROH", froh, "tab_roh")
 
             with sub3:
                 st.markdown("**SNeP-like** : Ne historique par race "
                             "(interprétation relative).")
-                if st.button("▶ Estimer Ne par race", key="btn_ne",
+                if st.button("▶ Estimer Ne par race", key="demo_btn_ne",
                              use_container_width=True):
                     try:
                         with st.spinner("Estimation Ne..."):
@@ -1960,7 +1992,8 @@ def main():
                 if st.session_state.ne_dict:
                     st.plotly_chart(
                         plot_ne_curves(st.session_state.ne_dict),
-                        use_container_width=True)
+                        use_container_width=True,
+                        key="demo_plot_ne_curves")
                     st.warning("⚠️ Interprétation RELATIVE uniquement.")
 
     # ============ TAB 7 : Sélection ============
@@ -1983,8 +2016,9 @@ def main():
 
             with sub1:
                 threshold_q = st.slider("Quantile outliers", 0.95, 0.9999,
-                                        0.999, 0.0001, format="%.4f")
-                if st.button("▶ FST par SNP", key="btn_fst",
+                                        0.999, 0.0001, format="%.4f",
+                                        key="sel_threshold_q")
+                if st.button("▶ FST par SNP", key="sel_btn_fst",
                              use_container_width=True):
                     try:
                         with st.spinner("FST..."):
@@ -2008,11 +2042,12 @@ def main():
                             st.session_state.snp_filt["CHR"].values,
                             threshold_q=threshold_q)
                         if fig:
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, use_container_width=True,
+                                            key="sel_plot_manhattan")
                         render_ai_panel("FST", fst_c, "tab_fst")
 
             with sub2:
-                if st.button("▶ FST pairwise", key="btn_fstp",
+                if st.button("▶ FST pairwise", key="sel_btn_fstp",
                              use_container_width=True):
                     try:
                         with st.spinner("FST pairwise..."):
@@ -2029,11 +2064,13 @@ def main():
                         plot_fst_pairwise(
                             st.session_state.fst_pairwise_matrix,
                             st.session_state.fst_pops),
-                        use_container_width=True)
+                        use_container_width=True,
+                        key="sel_plot_fst_pairwise")
 
             with sub3:
                 if st.button("▶ Détecter signatures",
-                             key="btn_sel", use_container_width=True):
+                             key="sel_btn_signatures",
+                             use_container_width=True):
                     try:
                         with st.spinner("Analyse FST + homosité..."):
                             sel_df = selection_signatures(
@@ -2047,7 +2084,7 @@ def main():
                     st.subheader("Top 20 régions sous sélection")
                     st.dataframe(
                         st.session_state.selection_df.head(20),
-                        use_container_width=True)
+                        use_container_width=True, key="sel_df_top20")
 
     # ============ TAB 8 : Phylogénie ============
     with tabs[7]:
@@ -2064,7 +2101,7 @@ def main():
             gt_use = (st.session_state.gt_pruned if has_pruned()
                       else st.session_state.gt_filt)
             if st.button("▶ Reynolds + NJ", type="primary",
-                         use_container_width=True):
+                         use_container_width=True, key="phylo_btn_run"):
                 try:
                     with st.spinner("Calcul Reynolds..."):
                         D, pops = reynolds_distance(
@@ -2087,7 +2124,8 @@ def main():
                     texttemplate="%{text}"))
                 fig.update_layout(height=600,
                                   title="Distance de Reynolds entre races")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True,
+                                key="phylo_plot_reynolds")
 
                 newick = nj_tree_newick(st.session_state.reynolds_D,
                                         st.session_state.reynolds_pops)
@@ -2096,7 +2134,8 @@ def main():
                 st.download_button("⬇ Télécharger Newick",
                                    newick.encode("utf-8"),
                                    file_name="cattle_nj_tree.nwk",
-                                   mime="text/plain")
+                                   mime="text/plain",
+                                   key="phylo_dl_newick")
                 st.info("💡 Importez dans **SplitsTree4** ou **iTOL**.")
 
     # ============ TAB 9 : Export ============
@@ -2117,12 +2156,12 @@ def main():
             snp_use = (st.session_state.snp_pruned if has_pruned()
                        else st.session_state.snp_filt)
 
-            prefix = st.text_input("Préfixe", "bovine_qc")
+            prefix = st.text_input("Préfixe", "bovine_qc", key="export_prefix")
             c1, c2, c3 = st.columns(3)
 
             with c1:
                 if st.button("📦 Préparer PLINK ZIP",
-                             use_container_width=True):
+                             use_container_width=True, key="export_btn_plink"):
                     try:
                         with st.spinner("Génération..."):
                             st.session_state["_plink_zip"] = build_plink_zip(
@@ -2136,10 +2175,12 @@ def main():
                         data=st.session_state["_plink_zip"],
                         file_name=f"{prefix}_plink.zip",
                         mime="application/zip",
-                        use_container_width=True)
+                        use_container_width=True,
+                        key="export_dl_plink")
 
             with c2:
-                if st.button("📄 Préparer VCF", use_container_width=True):
+                if st.button("📄 Préparer VCF", use_container_width=True,
+                             key="export_btn_vcf"):
                     try:
                         with st.spinner("Génération VCF..."):
                             st.session_state["_vcf_str"] = build_vcf_output(
@@ -2153,7 +2194,8 @@ def main():
                         data=st.session_state["_vcf_str"].encode("utf-8"),
                         file_name=f"{prefix}.vcf",
                         mime="text/plain",
-                        use_container_width=True)
+                        use_container_width=True,
+                        key="export_dl_vcf")
 
             with c3:
                 st.metric("Individus", gt_use.shape[0])
@@ -2171,7 +2213,8 @@ def main():
         if not has_qc():
             st.warning("⚠️ Lancez au moins le QC.")
         else:
-            project_name = st.text_input("Nom du projet", "Cattle_Project")
+            project_name = st.text_input("Nom du projet", "Cattle_Project",
+                                         key="report_project")
 
             interps = {}
             if st.session_state.qc_stats:
@@ -2190,7 +2233,7 @@ def main():
                 interps["ROH"] = interpret_roh(st.session_state.froh)
 
             if st.button("📄 Générer rapport HTML",
-                         use_container_width=True):
+                         use_container_width=True, key="report_btn_gen"):
                 figures = {}
                 if st.session_state.pca_scores is not None:
                     figures["PCA"] = plot_pca(
@@ -2230,7 +2273,8 @@ def main():
                     data=st.session_state["_report_html"].encode("utf-8"),
                     file_name=f"rapport_{datetime.now():%Y%m%d_%H%M}.html",
                     mime="text/html",
-                    use_container_width=True)
+                    use_container_width=True,
+                    key="report_dl_html")
 
             if interps:
                 st.subheader("🤖 Interprétations IA incluses")
