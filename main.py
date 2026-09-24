@@ -62,35 +62,41 @@ BOVINE_AUTOSOMES = [str(i) for i in range(1, 30)]
 # ============================================================
 
 def _hash_ndarray(x):
+    """
+    Hash d'un ndarray → renvoie une STRING.
+    IMPORTANT : renvoyer une string (jamais tuple/list) évite la
+    récursion infinie, car Streamlit re-hashe la valeur retournée
+    avec les mêmes hash_funcs.
+    """
     if not isinstance(x, np.ndarray) or x.size == 0:
-        return ("empty",)
+        return "empty"
     if x.dtype.kind in ("U", "S", "O"):
-        return ("strarr", x.shape, tuple(map(str, x.ravel()[:2000])))
-    return (x.shape, str(x.dtype),
-            float(np.nansum(x)), float(np.nansum(np.abs(x))),
-            float(np.nansum(x * x)))
+        preview = "|".join(map(str, x.ravel()[:2000]))
+        return f"strarr|{x.shape}|{preview}"
+    return (f"{x.shape}|{x.dtype}|"
+            f"{float(np.nansum(x))}|"
+            f"{float(np.nansum(np.abs(x)))}|"
+            f"{float(np.nansum(x * x))}")
 
 
 def _hash_any(x):
-    """Hash générique pour listes, tuples, Series, ExtensionArray pandas..."""
+    """Hash générique pour Series, Index, ExtensionArray pandas..."""
     try:
         arr = np.asarray(x)
-        if arr.dtype.kind in ("U", "S", "O"):
-            return ("strarr", arr.shape, tuple(map(str, arr.ravel()[:2000])))
         return _hash_ndarray(arr)
     except Exception:
         try:
-            return (type(x).__name__, len(x))
+            return f"{type(x).__name__}|{len(x)}"
         except Exception:
-            return (type(x).__name__,)
+            return type(x).__name__
 
 
+# ⚠️ N'inclure NI list NI tuple : Streamlit les hashe nativement.
+# Sinon => récursion infinie.
 HASH_FUNCS = {
     np.ndarray: _hash_ndarray,
     pd.Series: _hash_any,
     pd.Index: _hash_any,
-    list: _hash_any,
-    tuple: _hash_any,
 }
 
 # Enregistrement défensif des ExtensionArray pandas (ArrowStringArray, StringArray...)
