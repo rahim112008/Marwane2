@@ -1,3 +1,307 @@
+"""
+🐄 Bovine SNP Platform v4.0 (corrigée + GWAS + Convertisseur Axiom)
+Pipeline complet de bioinformatique pour puces SNP bovines.
+Conforme au MANUSCRIT DE FORMATION.
+
+Installation : pip install -r requirements.txt
+Lancement   : streamlit run main.py
+"""
+
+import gzip
+import io
+import json
+import os
+import warnings
+import zipfile
+from collections import Counter
+from datetime import datetime
+from io import BytesIO
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+from plotly.subplots import make_subplots
+from scipy import stats
+from scipy.optimize import minimize_scalar
+from scipy.stats import t as t_dist
+from sklearn.decomposition import NMF, PCA
+from sklearn.manifold import MDS as SklearnMDS
+
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+st.set_page_config(
+    page_title="🐄 Bovine SNP Platform v4.0",
+    page_icon="🐄",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+DEFAULT_THRESHOLDS = {
+    "geno": 0.05, "mind": 0.05, "maf": 0.05, "hwe": 1e-6, "het_sd": 3.0,
+    "king_cutoff": 0.354, "ld_r2": 0.2,
+}
+
+HWE_EXACT_MAX_SNP = 20_000
+
+ARS_UCD12_LENGTHS = {
+    "1": 158_534_110, "2": 136_231_102, "3": 121_005_158, "4": 120_000_166,
+    "5": 120_089_699, "6": 117_806_340, "7": 110_682_743, "8": 113_384_748,
+    "9": 105_708_134, "10": 103_308_737, "11": 107_310_763, "12": 91_163_125,
+    "13": 84_246_514, "14": 84_648_346, "15": 85_207_080, "16": 81_726_628,
+    "17": 75_176_999, "18": 66_059_976, "19": 64_089_169, "20": 72_042_983,
+    "21": 71_599_096, "22": 61_416_492, "23": 52_531_573, "24": 62_384_193,
+    "25": 42_959_610, "26": 51_680_158, "27": 46_772_073, "28": 46_333_854,
+    "29": 51_319_414, "X": 139_009_144, "Y": 50_927_933, "MT": 16_338,
+}
+BOVINE_AUTOSOMES = [str(i) for i in range(1, 30)]
+
+# ============================================================
+# CACHE STREAMLIT
+# ============================================================
+
+def _hash_ndarray(x):
+    """Hash d'un ndarray → STRING (évite la récursion infinie)."""
+    if not isinstance(x, np.ndarray) or x.size == 0:
+        return "empty"
+    if x.dtype.kind in ("U", "S", "O"):
+        preview = "|".join(map(str, x.ravel()[:2000]))
+        return f"strarr|{x.shape}|{preview}"
+    return (f"{x.shape}|{x.dtype}|"
+            f"{float(np.nansum(x))}|"
+            f"{float(np.nansum(np.abs(x)))}|"
+            f"{float(np.nansum(x * x))}")
+
+
+def _hash_any(x):
+    try:
+        arr = np.asarray(x)
+        return _hash_ndarray(arr)
+    except Exception:
+        try:
+            return f"{type(x).__name__}|{len(x)}"
+        except Exception:
+            return type(x).__name__
+
+
+HASH_FUNCS = {
+    np.ndarray: _hash_ndarray,
+    pd.Series: _hash_any,
+    pd.Index: _hash_any,
+}
+
+for _name in (
+    "ArrowStringArray", "StringArray", "IntegerArray", "FloatingArray",
+    "BooleanArray", "NumpyExtensionArray", "PandasArray",
+    "DatetimeArray", "TimedeltaArray", "PeriodArray",
+    "IntervalArray", "Categorical",
+):
+    _cls = getattr(pd.arrays, _name, None)
+    if _cls is None:
+        try:
+            _cls = getattr(pd.core.arrays, _name, None)
+        except Exception:
+            _cls = None
+    if _cls is not None:
+        HASH_FUNCS[_cls] = _hash_any
+
+
+def cache_data(func=None, **kw):
+    def _decorate(f):
+        return st.cache_data(show_spinner=False, hash_funcs=HASH_FUNCS, **kw)(f)
+    if func is None:
+        return _decorate
+    return _decorate(func)
+
+
+# ============================================================
+# UTILITAIRES
+# ============================================================
+
+def impute_mean(gt):
+    gt2 = gt.astype(np.float32, copy=True)
+    col_mean = np.nanmean(gt2, axis=0)
+    col_mean = np.where(np.isnan(col_mean), 0.0, col_mean)
+    nan_mask = np.isnan(gt2)
+    if not nan_mask.any():
+        return gt2
+    gt2[nan_mask] = np.take(col_mean, np.where(nan_mask)[1])
+    return gt2
+
+
+def _autosome_weights():
+    lens = np.array([ARS_UCD12_LENGTHS[c] for c in BOVINE_AUTOSOMES], dtype=float)
+    return lens / lens.sum()
+
+
+def _chr_sort_key(chrom):
+    s = str(chrom).upper().replace("CHR", "").replace("CHROMOSOME", "")
+    if s.isdigit():
+        return (0, int(s), "")
+    special = {"X": 100, "Y": 101, "MT": 102, "M": 102}
+    if s in special:
+        return (1, special[s], "")
+    return (2, 0, s)
+
+
+def _detect_encoding(raw):
+    if len(raw) >= 2 and raw[:2] == b"\x1f\x8b":
+        return "gzip"
+    if len(raw) >= 2 and raw[:2] == b"\x6c\x1b":
+        return "plink_binary"
+    return "text"
+
+
+def step_header(numero, titre, ce_qu_on_fait, pourquoi, attendu):
+    with st.expander(f"📖 **Étape {numero} — {titre}**", expanded=False):
+        st.markdown(f"**🎯 Ce qu'on fait :** {ce_qu_on_fait}")
+        st.markdown(f"**❓ Pourquoi :** {pourquoi}")
+        st.markdown(f"**✅ Ce qu'on attend :** {attendu}")
+
+
+# ============================================================
+# CONVERTISSEUR AXIOM → PED
+# ============================================================
+
+def sample_to_fid_iid(sample_name, fid_parts=2):
+    name = str(sample_name).strip()
+    for ext in (".CEL", ".cel", ".TXT", ".txt", ".gz", ".GZ"):
+        if name.endswith(ext):
+            name = name[:-len(ext)]
+    name = (name.replace("(", "_").replace(")", "")
+                .replace("[", "_").replace("]", "")
+                .replace(" ", "_").replace("/", "_"))
+    while "__" in name:
+        name = name.replace("__", "_")
+    name = name.strip("_")
+    parts = name.split("_")
+    fid = "_".join(parts[:fid_parts]) if len(parts) >= fid_parts else parts[0]
+    return fid, name
+
+
+def _clean_allele(a):
+    if a is None:
+        return "0"
+    a = str(a).strip()
+    if a in ("", ".", "-", "NA", "nan", "None", "0", "00"):
+        return "0"
+    return a
+
+
+def parse_raw_axiom_file(raw_bytes, filename=""):
+    if (filename.endswith(".gz")
+            or (len(raw_bytes) >= 2 and raw_bytes[:2] == b"\x1f\x8b")):
+        try:
+            raw = gzip.decompress(raw_bytes)
+        except Exception as e:
+            raise ValueError(f"Fichier .gz corrompu : {e}")
+    else:
+        raw = raw_bytes
+
+    text = raw.decode("utf-8", errors="replace")
+    lines = [l.rstrip("\r\n") for l in text.splitlines()]
+    lines = [l for l in lines if l.strip()]
+    if not lines:
+        raise ValueError("Fichier vide.")
+
+    first = lines[0]
+    is_header = (first.startswith("#")
+                 or first.startswith("Sample")
+                 or "Sample Filename" in first[:50])
+    start = 1 if is_header else 0
+
+    samples, geno_rows = [], []
+    for line in lines[start:]:
+        parts = line.split("\t")
+        if len(parts) < 2:
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+        sample_name = parts[0].strip()
+        cells = [c.strip() for c in parts[1:]]
+        alleles = []
+        for cell in cells:
+            toks = cell.split()
+            if len(toks) == 2:
+                alleles.append((_clean_allele(toks[0]),
+                                _clean_allele(toks[1])))
+            elif len(toks) == 1:
+                s = toks[0]
+                if len(s) == 2 and all(ch in "ACGT0" for ch in s):
+                    alleles.append((s[0], s[1]))
+                else:
+                    alleles.append((_clean_allele(s), _clean_allele(s)))
+            else:
+                alleles.append(("0", "0"))
+        samples.append(sample_name)
+        geno_rows.append(alleles)
+
+    if not samples:
+        raise ValueError("Aucun échantillon trouvé dans le fichier.")
+
+    counts = [len(r) for r in geno_rows]
+    common = Counter(counts).most_common(1)[0][0]
+    for i, r in enumerate(geno_rows):
+        if len(r) > common:
+            geno_rows[i] = r[:common]
+        elif len(r) < common:
+            geno_rows[i] = r + [("0", "0")] * (common - len(r))
+
+    return samples, geno_rows, common
+
+
+def build_ped_map_from_raw(samples, geno_rows, fid_parts=2):
+    n_ind = len(samples)
+    n_snp = len(geno_rows[0]) if n_ind else 0
+
+    map_lines = [f"1\tSNP_{i+1:06d}\t0\t{i+1}" for i in range(n_snp)]
+    map_text = "\n".join(map_lines) + "\n"
+
+    ped_lines = []
+    for i, sample in enumerate(samples):
+        fid, iid = sample_to_fid_iid(sample, fid_parts=fid_parts)
+        cols = [fid, iid, "0", "0", "0", "-9"]
+        for a1, a2 in geno_rows[i]:
+            cols.append(a1)
+            cols.append(a2)
+        ped_lines.append("\t".join(cols))
+    ped_text = "\n".join(ped_lines) + "\n"
+
+    return ped_text, map_text, n_snp
+
+
+def preview_ped_dataframe(samples, geno_rows, max_rows=10, max_snp=20):
+    rows = []
+    n_snp = len(geno_rows[0]) if geno_rows else 0
+    n_show = min(max_snp, n_snp)
+    for sample, alleles in zip(samples[:max_rows], geno_rows[:max_rows]):
+        fid, iid = sample_to_fid_iid(sample)
+        row = {"FID": fid, "IID": iid, "PID": 0, "MID": 0,
+               "Sex": 0, "Pheno": -9}
+        for j in range(n_show):
+            a1, a2 = alleles[j]
+            row[f"SNP_{j+1:05d}_A1"] = a1
+            row[f"SNP_{j+1:05d}_A2"] = a2
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def render_axiom_converter_page():
+    st.header("🔄 Convertisseur Axiom → PED")
+    st.markdown("""
+Transforme un fichier brut de génotypage Axiom/Thermo Fisher
+(cellules `A1 A2` séparées par tabulation) en fichiers **PED** et **MAP**
+au format PLINK.
+
+**Format d'entrée :**
+#Sample Filename Genotypes
+BEN_EBG_..._A01.CEL C C G G A G C C ...
+
+text
     """)
     st.divider()
 
