@@ -64,11 +64,50 @@ BOVINE_AUTOSOMES = [str(i) for i in range(1, 30)]
 def _hash_ndarray(x):
     if not isinstance(x, np.ndarray) or x.size == 0:
         return ("empty",)
+    if x.dtype.kind in ("U", "S", "O"):
+        return ("strarr", x.shape, tuple(map(str, x.ravel()[:2000])))
     return (x.shape, str(x.dtype),
             float(np.nansum(x)), float(np.nansum(np.abs(x))),
             float(np.nansum(x * x)))
 
-HASH_FUNCS = {np.ndarray: _hash_ndarray}
+
+def _hash_any(x):
+    """Hash générique pour listes, tuples, Series, ExtensionArray pandas..."""
+    try:
+        arr = np.asarray(x)
+        if arr.dtype.kind in ("U", "S", "O"):
+            return ("strarr", arr.shape, tuple(map(str, arr.ravel()[:2000])))
+        return _hash_ndarray(arr)
+    except Exception:
+        try:
+            return (type(x).__name__, len(x))
+        except Exception:
+            return (type(x).__name__,)
+
+
+HASH_FUNCS = {
+    np.ndarray: _hash_ndarray,
+    pd.Series: _hash_any,
+    pd.Index: _hash_any,
+    list: _hash_any,
+    tuple: _hash_any,
+}
+
+# Enregistrement défensif des ExtensionArray pandas (ArrowStringArray, StringArray...)
+for _name in (
+    "ArrowStringArray", "StringArray", "IntegerArray", "FloatingArray",
+    "BooleanArray", "NumpyExtensionArray", "PandasArray",
+    "DatetimeArray", "TimedeltaArray", "PeriodArray",
+    "IntervalArray", "Categorical",
+):
+    _cls = getattr(pd.arrays, _name, None)
+    if _cls is None:
+        try:
+            _cls = getattr(pd.core.arrays, _name, None)
+        except Exception:
+            _cls = None
+    if _cls is not None:
+        HASH_FUNCS[_cls] = _hash_any
 
 
 def cache_data(func=None, **kw):
@@ -203,7 +242,7 @@ def parse_ped(ped_bytes, n_snp_map):
         raise ValueError(f"❌ Format PED invalide : {n_cols_first} colonnes.")
 
     if 0 < n_snp_ped < 10 and len(lines) > 100:
-        raise ValueError(f"⚠️ Fichier probablement transposé.")
+        raise ValueError("⚠️ Fichier probablement transposé.")
 
     if n_snp_ped != n_snp_map and n_snp_ped > 0:
         st.warning(f"⚠️ Désalignement PED/MAP : {n_snp_ped} vs {n_snp_map} SNPs.")
@@ -214,11 +253,9 @@ def parse_ped(ped_bytes, n_snp_map):
     expected_cols_eff = 6 + 2 * n_snp_eff
     fids, iids, geno_rows = [], [], []
     rejected_short, rejected_empty = 0, 0
-    lengths_seen = Counter()
 
     for line in lines:
         parts = line.split()
-        lengths_seen[len(parts)] += 1
         if len(parts) < 7:
             rejected_empty += 1
             continue
@@ -636,11 +673,11 @@ def apply_qc_filters(gt, ind_df, snp_df, params):
 
 @cache_data
 def fst_per_snp(gt, pop_labels):
-    pops = np.unique(pop_labels)
+    pops = np.unique(np.asarray(pop_labels))
     if len(pops) < 2:
         return np.full(gt.shape[1], np.nan)
     fst = np.full(gt.shape[1], np.nan, dtype=np.float64)
-    masks = {p: (pop_labels == p) for p in pops}
+    masks = {p: (np.asarray(pop_labels) == p) for p in pops}
     for j in range(gt.shape[1]):
         pl, nl = [], []
         for p in pops:
@@ -662,10 +699,11 @@ def fst_per_snp(gt, pop_labels):
 
 @cache_data
 def fst_pairwise(gt, pop_labels):
-    pops = sorted(np.unique(pop_labels))
+    labels = np.asarray(pop_labels)
+    pops = sorted(np.unique(labels))
     K = len(pops)
     matrix = np.full((K, K), np.nan); np.fill_diagonal(matrix, 0.0)
-    masks = {p: (pop_labels == p) for p in pops}
+    masks = {p: (labels == p) for p in pops}
     for i in range(K):
         for j in range(i + 1, K):
             g1 = gt[masks[pops[i]]]; g2 = gt[masks[pops[j]]]
@@ -708,7 +746,7 @@ def ld_decay(gt, snp_bp, max_kb=1000, max_snp=1500, seed=42):
     rng = np.random.default_rng(seed)
     idx = (np.sort(rng.choice(n_snp, max_snp, replace=False))
            if n_snp > max_snp else np.arange(n_snp))
-    gt_sub = impute_mean(gt[:, idx]); bp_sub = snp_bp[idx].astype(np.float64)
+    gt_sub = impute_mean(gt[:, idx]); bp_sub = np.asarray(snp_bp)[idx].astype(np.float64)
     X = gt_sub - gt_sub.mean(0)
     std = gt_sub.std(0); std[std < 1e-8] = np.nan
     X = X / std
@@ -835,10 +873,11 @@ def estimate_ne_historical(gt, snp_df, max_snp=2000):
 
 @cache_data
 def reynolds_distance(gt, pop_labels):
-    pops = sorted(np.unique(pop_labels)); K = len(pops)
+    labels = np.asarray(pop_labels)
+    pops = sorted(np.unique(labels)); K = len(pops)
     p_hat = {}
     for p in pops:
-        p_hat[p] = np.nanmean(gt[pop_labels == p], 0) / 2.0
+        p_hat[p] = np.nanmean(gt[labels == p], 0) / 2.0
     D = np.zeros((K, K))
     for i in range(K):
         for j in range(i + 1, K):
@@ -925,7 +964,7 @@ def detect_roh(gt, snp_df_json, min_snps=30, min_kb=500.0):
 
 @cache_data
 def selection_signatures(gt, snp_df, pop_labels):
-    fst = fst_per_snp(gt, pop_labels)
+    fst = fst_per_snp(gt, np.asarray(pop_labels))
     hom = np.nanmean((gt == 0) | (gt == 2), axis=0)
     df = snp_df.copy()
     df["FST"] = fst; df["HOM"] = hom
@@ -957,7 +996,8 @@ def interpret_qc(qc_stats):
 
 
 def interpret_maf(maf_values):
-    m = maf_values[np.isfinite(maf_values)]
+    m = np.asarray(maf_values)
+    m = m[np.isfinite(m)]
     mm = float(m.mean()); pct = float((m < 0.05).mean() * 100)
     if mm > 0.25:
         v, e = "🟢 Spectre riche", "Bonne diversité, variants informatifs."
@@ -971,7 +1011,7 @@ def interpret_maf(maf_values):
 
 
 def interpret_fst(fst_values):
-    m = float(np.nanmean(fst_values))
+    m = float(np.nanmean(np.asarray(fst_values)))
     if m < 0.05:
         v, e = "🟢 Faible", "Fort flux génique."
     elif m < 0.15:
@@ -997,7 +1037,7 @@ def interpret_admixture(cv_results):
 
 
 def interpret_roh(froh):
-    m = float(np.nanmean(froh))
+    m = float(np.nanmean(np.asarray(froh)))
     if m < 0.02:
         v, e = "🟢 Consanguinité faible", "Bonne diversité."
     elif m < 0.10:
@@ -1449,6 +1489,11 @@ def has_pruned():
             and st.session_state.snp_pruned is not None)
 
 
+def _fid_array():
+    """Retourne FID comme ndarray numpy de str (évite ArrowStringArray)."""
+    return st.session_state.ind_filt["FID"].astype(str).to_numpy()
+
+
 # ============================================================
 # STREAMLIT — INTERFACE PRINCIPALE
 # ============================================================
@@ -1798,7 +1843,7 @@ def main():
                 except Exception as e:
                     st.error(f"❌ {e}")
 
-            labels = st.session_state.ind_filt["FID"].values
+            labels = _fid_array()
 
             if st.session_state.pca_scores is not None:
                 st.plotly_chart(plot_pca(st.session_state.pca_scores,
@@ -1888,8 +1933,8 @@ def main():
             if st.session_state.admixture_Q is not None:
                 Q = st.session_state.admixture_Q
                 K = st.session_state.admixture_K
-                pops = st.session_state.ind_filt["FID"].values
-                iids = st.session_state.ind_filt["IID"].values
+                pops = _fid_array()
+                iids = st.session_state.ind_filt["IID"].astype(str).to_numpy()
                 fig, df_s = plot_admixture(Q, iids, pops, K)
                 st.plotly_chart(fig, use_container_width=True,
                                 key="admix_plot_barplot")
@@ -1960,7 +2005,7 @@ def main():
                     c1.metric("FROH moyen", f"{np.mean(froh):.4f}")
                     c2.metric("FROH médian", f"{np.median(froh):.4f}")
                     c3.metric("Total ROH", len(st.session_state.roh_df))
-                    labels = st.session_state.ind_filt["FID"].values
+                    labels = _fid_array()
                     st.plotly_chart(
                         plot_roh_histogram(froh, labels),
                         use_container_width=True,
@@ -2023,8 +2068,7 @@ def main():
                     try:
                         with st.spinner("FST..."):
                             st.session_state.fst = fst_per_snp(
-                                gt_use,
-                                st.session_state.ind_filt["FID"].values)
+                                gt_use, _fid_array())
                         st.success("✅ FST calculé.")
                     except Exception as e:
                         st.error(f"❌ {e}")
@@ -2051,9 +2095,7 @@ def main():
                              use_container_width=True):
                     try:
                         with st.spinner("FST pairwise..."):
-                            mat, pops = fst_pairwise(
-                                gt_use,
-                                st.session_state.ind_filt["FID"].values)
+                            mat, pops = fst_pairwise(gt_use, _fid_array())
                             st.session_state.fst_pairwise_matrix = mat
                             st.session_state.fst_pops = pops
                         st.success("✅ Matrice calculée.")
@@ -2075,7 +2117,7 @@ def main():
                         with st.spinner("Analyse FST + homosité..."):
                             sel_df = selection_signatures(
                                 gt_use, st.session_state.snp_filt,
-                                st.session_state.ind_filt["FID"].values)
+                                _fid_array())
                             st.session_state.selection_df = sel_df
                         st.success("✅ Signatures détectées.")
                     except Exception as e:
@@ -2104,9 +2146,7 @@ def main():
                          use_container_width=True, key="phylo_btn_run"):
                 try:
                     with st.spinner("Calcul Reynolds..."):
-                        D, pops = reynolds_distance(
-                            gt_use,
-                            st.session_state.ind_filt["FID"].values)
+                        D, pops = reynolds_distance(gt_use, _fid_array())
                         st.session_state.reynolds_D = D
                         st.session_state.reynolds_pops = pops
                     st.success("✅ Matrice Reynolds calculée.")
@@ -2239,11 +2279,11 @@ def main():
                     figures["PCA"] = plot_pca(
                         st.session_state.pca_scores,
                         st.session_state.pca_var,
-                        st.session_state.ind_filt["FID"].values)
+                        st.session_state.ind_filt["FID"].astype(str).to_numpy())
                 if st.session_state.mds_coords is not None:
                     figures["MDS"] = plot_mds(
                         st.session_state.mds_coords,
-                        st.session_state.ind_filt["FID"].values)
+                        st.session_state.ind_filt["FID"].astype(str).to_numpy())
                 if st.session_state.fst is not None:
                     figures["Manhattan FST"] = plot_manhattan(
                         st.session_state.fst,
@@ -2255,8 +2295,8 @@ def main():
                 if st.session_state.admixture_Q is not None:
                     fig_adm, _ = plot_admixture(
                         st.session_state.admixture_Q,
-                        st.session_state.ind_filt["IID"].values,
-                        st.session_state.ind_filt["FID"].values,
+                        st.session_state.ind_filt["IID"].astype(str).to_numpy(),
+                        st.session_state.ind_filt["FID"].astype(str).to_numpy(),
                         st.session_state.admixture_K)
                     figures["Admixture"] = fig_adm
 
@@ -2310,6 +2350,8 @@ def main():
                 gt_p = st.session_state.gt_pruned
                 snp_p = st.session_state.snp_pruned
 
+                fid_arr = ind_f["FID"].astype(str).to_numpy()
+
                 # 4. Structure
                 st.session_state.pca_scores, st.session_state.pca_var = \
                     pca_analysis(gt_p, 10)
@@ -2321,9 +2363,8 @@ def main():
                                                   max_kb=1000, max_snp=1000)
 
                 # 6. FST
-                st.session_state.fst = fst_per_snp(gt_p,
-                                                    ind_f["FID"].values)
-                mat, pops = fst_pairwise(gt_p, ind_f["FID"].values)
+                st.session_state.fst = fst_per_snp(gt_p, fid_arr)
+                mat, pops = fst_pairwise(gt_p, fid_arr)
                 st.session_state.fst_pairwise_matrix = mat
                 st.session_state.fst_pops = pops
 
@@ -2353,7 +2394,7 @@ def main():
                 st.session_state.ne_dict = ne_dict
 
                 # 10. Reynolds
-                D, rp = reynolds_distance(gt_p, ind_f["FID"].values)
+                D, rp = reynolds_distance(gt_p, fid_arr)
                 st.session_state.reynolds_D = D
                 st.session_state.reynolds_pops = rp
 
