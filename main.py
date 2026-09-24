@@ -306,8 +306,8 @@ text
     st.divider()
 
     raw_f = st.file_uploader(
-        "Fichier brut Axiom (.txt, .tsv, .csv, .gz)",
-        type=["txt", "tsv", "csv", "gz"],
+        "Fichier brut Axiom (.ped, .txt, .tsv, .csv, .gz)",
+        type=["ped", "txt", "tsv", "csv", "gz"],
         key="conv_raw_file")
 
     c1, c2 = st.columns(2)
